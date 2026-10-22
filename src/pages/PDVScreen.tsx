@@ -1,0 +1,791 @@
+import React, { useState, useEffect, useRef } from "react";
+import { Link } from "react-router-dom";
+import {
+  Barcode,
+  Search,
+  Trash2,
+  ShoppingCart,
+  FileSpreadsheet,
+  CheckCircle,
+  RotateCcw,
+  Package,
+  List,
+  User,
+  LogOut,
+  X,
+} from "lucide-react";
+
+import type {
+  ItemCarrinho,
+  Produto,
+  FormaPagamento,
+  PedidoResponseDTO,
+} from "../types/pdv";
+import type { Pessoa } from "../types/cliente";
+
+import { empresaService } from "../services/empresaService";
+
+import { catalogoService } from "../services/catalogoService";
+import { vendasService } from "../services/vendasService";
+import { ModalFinalizarVenda } from "../components/ModalFinalizarVenda";
+import { ModalBuscarProduto } from "../components/produto/ModalBuscarProduto";
+import { ModalOrcamentosAbertos } from "../components/pedido/ModalOrcamentosAbertos";
+import { ModalBuscarCliente } from "../components/cliente/ModalBuscarCliente";
+
+import logoDx14 from "../assets/logo-dx14.png";
+
+export const PDVScreen: React.FC = () => {
+  const [carrinho, setCarrinho] = useState<ItemCarrinho[]>([]);
+  const [busca, setBusca] = useState<string>("");
+  const [quantidade, setQuantidade] = useState<string>("1");
+  const [mensagemStatus, setMensagemStatus] = useState<string>("Pronto para venda");
+  const [ultimoItem, setUltimoItem] = useState<Produto | null>(null);
+  const [modalAberto, setModalAberto] = useState<boolean>(false);
+  const [modalProdutoAberto, setModalProdutoAberto] = useState<boolean>(false);
+  const [modalOrcamentosAberto, setModalOrcamentosAberto] = useState<boolean>(false);
+  const [modalClienteAberto, setModalClienteAberto] = useState<boolean>(false);
+  const [produtosLista, setProdutosLista] = useState<Produto[]>([]);
+  const [carregandoProdutos, setCarregandoProdutos] = useState<boolean>(false);
+  const [loading, setLoading] = useState<boolean>(false);
+  const [pedidoOrigemId, setPedidoOrigemId] = useState<number | null>(null);
+  const [pedidoOrigemNumero, setPedidoOrigemNumero] = useState<string | null>(null);
+  const [clienteSelecionado, setClienteSelecionado] = useState<Pessoa | null>(null);
+  const [jaCarregouProdutos, setJaCarregouProdutos] = useState<boolean>(false);
+  const [nomeEmpresa, setNomeEmpresa] = useState<string>("PDV");
+
+  const inputBuscaRef = useRef<HTMLInputElement>(null);
+
+  const modoOrcamento = pedidoOrigemId !== null;
+
+  const invalidarCacheProdutos = () => {
+    setJaCarregouProdutos(false);
+    setProdutosLista([]);
+  };
+
+  useEffect(() => {
+    inputBuscaRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    empresaService
+      .obterPrincipal()
+      .then((e) => {
+        if (e?.nomeFantasia) setNomeEmpresa(e.nomeFantasia);
+        else if (e?.razaoSocial) setNomeEmpresa(e.razaoSocial);
+      })
+      .catch(() => setNomeEmpresa("PDV"));
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (
+        modalAberto ||
+        modalProdutoAberto ||
+        modalOrcamentosAberto ||
+        modalClienteAberto
+      )
+        return;
+
+      if (e.key === "F4") {
+        e.preventDefault();
+        if (carrinho.length > 0) setModalAberto(true);
+      } else if (e.key === "F2") {
+        e.preventDefault();
+        if (modoOrcamento) {
+          setMensagemStatus(
+            "Orçamento carregado — finalize com F4 ou limpe com F8 para criar um novo",
+          );
+          return;
+        }
+        salvarComoOrcamento();
+      } else if (e.key === "F6") {
+        e.preventDefault();
+        if (modoOrcamento) {
+          setMensagemStatus("Bloqueado: orçamento carregado");
+          return;
+        }
+        setModalClienteAberto(true);
+      } else if (e.key === "F8") {
+        e.preventDefault();
+        limparVenda();
+      } else if (e.key === "F3") {
+        e.preventDefault();
+        if (modoOrcamento) {
+          setMensagemStatus("Bloqueado: orçamento carregado");
+          return;
+        }
+        abrirModalProdutos();
+      } else if (e.key === "F5") {
+        e.preventDefault();
+        abrirModalOrcamentos();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [
+    carrinho,
+    modalAberto,
+    modalProdutoAberto,
+    modalOrcamentosAberto,
+    modalClienteAberto,
+    modoOrcamento,
+  ]);
+
+  const totalGeral = carrinho.reduce((acc, item) => acc + item.subtotal, 0);
+
+  const parseQuantidade = (valor: string): number => {
+    const n = parseFloat(valor.replace(",", "."));
+    return Number.isFinite(n) && n > 0 ? n : 1;
+  };
+
+  const abrirModalProdutos = async () => {
+    setModalProdutoAberto(true);
+    if (jaCarregouProdutos) return;
+
+    setCarregandoProdutos(true);
+    try {
+      const lista = await catalogoService.listarProdutos();
+      setProdutosLista(lista);
+      setJaCarregouProdutos(true);
+    } catch (err) {
+      console.error(err);
+      setMensagemStatus("Erro ao carregar lista de produtos");
+    } finally {
+      setCarregandoProdutos(false);
+    }
+  };
+
+  const abrirModalOrcamentos = () => {
+    setModalOrcamentosAberto(true);
+  };
+
+  const selecionarCliente = (pessoa: Pessoa) => {
+    setClienteSelecionado(pessoa);
+    setModalClienteAberto(false);
+    setMensagemStatus(`Cliente: ${pessoa.nome}`);
+    setTimeout(() => inputBuscaRef.current?.focus(), 100);
+  };
+
+  const limparCliente = () => {
+    setClienteSelecionado(null);
+    setMensagemStatus("Cliente: CONSUMIDOR FINAL");
+    setTimeout(() => inputBuscaRef.current?.focus(), 100);
+  };
+
+  const selecionarProdutoDoModal = (produto: Produto) => {
+    const qtd = parseQuantidade(quantidade);
+    adicionarAoCarrinho(produto, qtd);
+    setUltimoItem(produto);
+    setMensagemStatus(`Adicionado: ${produto.descricao}`);
+    setQuantidade("1");
+    setModalProdutoAberto(false);
+    setTimeout(() => inputBuscaRef.current?.focus(), 100);
+  };
+
+  const carregarOrcamentoNoCarrinho = async (pedidoSimplificado: PedidoResponseDTO) => {
+    setLoading(true);
+    try {
+      const pedido = await vendasService.buscarPedidoPorId(pedidoSimplificado.id);
+
+      const itens: ItemCarrinho[] = (pedido.itens ?? []).map((i) => ({
+        produtoId: i.produtoId,
+        descricao: i.descricaoProduto,
+        unidade: i.unidade ?? "",
+        quantidade: i.quantidade,
+        precoUnitario: i.precoUnitario,
+        subtotal: i.subtotal,
+      }));
+
+      setCarrinho(itens);
+      setPedidoOrigemId(pedido.id);
+      setPedidoOrigemNumero(pedido.numero);
+      setUltimoItem(null);
+      setMensagemStatus(`Orçamento ${pedido.numero} carregado para venda`);
+      setModalOrcamentosAberto(false);
+      setTimeout(() => inputBuscaRef.current?.focus(), 100);
+    } catch (err) {
+      console.error(err);
+      setMensagemStatus("Erro ao carregar orçamento");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const cancelarOrcamento = async (pedido: PedidoResponseDTO) => {
+    await vendasService.cancelarPedido(pedido.id);
+    setMensagemStatus(`Orçamento ${pedido.numero} cancelado`);
+  };
+
+  const adicionarAoCarrinho = (produto: Produto, qtd: number) => {
+    setCarrinho((prev) => {
+      const index = prev.findIndex((i) => i.produtoId === produto.id);
+      if (index >= 0) {
+        const novo = [...prev];
+        const novaQtd = novo[index].quantidade + qtd;
+        novo[index] = {
+          ...novo[index],
+          quantidade: novaQtd,
+          subtotal: novaQtd * novo[index].precoUnitario,
+        };
+        return novo;
+      }
+
+      const novoItem: ItemCarrinho = {
+        produtoId: produto.id,
+        descricao: produto.descricao,
+        unidade: produto.unidade,
+        quantidade: qtd,
+        precoUnitario: produto.precoVenda,
+        subtotal: qtd * produto.precoVenda,
+      };
+      return [...prev, novoItem];
+    });
+  };
+
+  const processarBusca = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (modoOrcamento) {
+      setMensagemStatus("Bloqueado: orçamento carregado. Limpe com F8 para liberar.");
+      return;
+    }
+
+    const termo = busca.trim();
+    if (!termo) return;
+
+    const qtd = parseQuantidade(quantidade);
+
+    setLoading(true);
+    try {
+      let produto: Produto | null = null;
+
+      produto = await catalogoService.buscarPorCodigoBarras(termo);
+
+      if (!produto) {
+        const resultados = await catalogoService.buscarPorDescricao(termo);
+        if (resultados.length > 0) {
+          produto = resultados[0];
+        }
+      }
+
+      if (produto) {
+        adicionarAoCarrinho(produto, qtd);
+        setUltimoItem(produto);
+        setMensagemStatus(`Adicionado: ${produto.descricao}`);
+        setBusca("");
+        setQuantidade("1");
+      } else {
+        setMensagemStatus(`Produto "${termo}" não localizado`);
+      }
+    } catch (err) {
+      console.error(err);
+      setMensagemStatus("Erro ao consultar produto no servidor");
+    } finally {
+      setLoading(false);
+      inputBuscaRef.current?.focus();
+    }
+  };
+
+  const removerItem = (index: number) => {
+    if (modoOrcamento) {
+      setMensagemStatus("Bloqueado: orçamento carregado. Limpe com F8 para liberar.");
+      return;
+    }
+    setCarrinho((prev) => prev.filter((_, i) => i !== index));
+    inputBuscaRef.current?.focus();
+  };
+
+  const limparVenda = () => {
+    if (
+      carrinho.length === 0 ||
+      window.confirm(
+        modoOrcamento
+          ? "Limpar o orçamento carregado? Nada será salvo."
+          : "Deseja limpar todos os itens da venda?",
+      )
+    ) {
+      setCarrinho([]);
+      setUltimoItem(null);
+      setPedidoOrigemId(null);
+      setPedidoOrigemNumero(null);
+      setClienteSelecionado(null);
+      setMensagemStatus("Caixa livre");
+      inputBuscaRef.current?.focus();
+    }
+  };
+
+  const salvarComoOrcamento = async () => {
+    if (modoOrcamento) {
+      setMensagemStatus("Bloqueado: finalize o orçamento carregado com F4.");
+      return;
+    }
+
+    if (carrinho.length === 0) {
+      alert("Adicione itens antes de gerar o orçamento.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const pedido = await vendasService.criarPedido({
+        clienteId: clienteSelecionado?.id,
+        status: "ORCAMENTO",
+        formaPagamento: "DINHEIRO",
+        valorDesconto: 0,
+        itens: carrinho.map((i) => ({
+          produtoId: i.produtoId,
+          quantidade: i.quantidade,
+          precoUnitario: i.precoUnitario,
+        })),
+      });
+
+      alert(`Orçamento gerado com sucesso! Número: ${pedido.numero}`);
+      setCarrinho([]);
+      setUltimoItem(null);
+      setClienteSelecionado(null);
+      setMensagemStatus(`Orçamento ${pedido.numero} salvo`);
+    } catch (err) {
+      console.error(err);
+      alert("Erro ao salvar orçamento.");
+    } finally {
+      setLoading(false);
+      inputBuscaRef.current?.focus();
+    }
+  };
+
+  const confirmarFinalizacao = async (
+    forma: FormaPagamento,
+    _valorRecebido: number,
+    desconto: number,
+    senhaAutorizacao?: string,
+  ) => {
+    setLoading(true);
+    try {
+      let pedido: PedidoResponseDTO;
+
+      if (pedidoOrigemId !== null) {
+        pedido = await vendasService.finalizarOrcamento(pedidoOrigemId, {
+          valorDesconto: desconto,
+          senhaAutorizacao,
+        });
+      } else {
+        pedido = await vendasService.criarPedido({
+          clienteId: clienteSelecionado?.id,
+          status: "FINALIZADO",
+          formaPagamento: forma,
+          valorDesconto: desconto,
+          senhaAutorizacao,
+          itens: carrinho.map((i) => ({
+            produtoId: i.produtoId,
+            quantidade: i.quantidade,
+            precoUnitario: i.precoUnitario,
+          })),
+        });
+      }
+
+      setModalAberto(false);
+      alert(`Venda finalizada com sucesso! Pedido ${pedido.numero}`);
+      setCarrinho([]);
+      setUltimoItem(null);
+      setPedidoOrigemId(null);
+      setPedidoOrigemNumero(null);
+      setClienteSelecionado(null);
+      setMensagemStatus(`Venda ${pedido.numero} concluída`);
+
+      invalidarCacheProdutos();
+    } catch (err) {
+      console.error(err);
+      throw err;
+    } finally {
+      setLoading(false);
+      inputBuscaRef.current?.focus();
+    }
+  };
+
+  return (
+    <div className="flex h-screen w-screen select-none flex-col bg-ink-800 font-sans text-ink-100">
+      <header className="flex h-16 items-center justify-between border-b border-black/40 bg-gradient-to-r from-brand-dark via-brand-dark to-brand-metal px-6 shadow-lg">
+        <div className="flex items-center gap-4">
+          <img
+            src={logoDx14}
+            alt="DX14 Soluções Inteligentes"
+            className="h-10 w-auto"
+            draggable={false}
+          />
+          <div className="h-8 w-px bg-white/10" />
+          <div className="flex items-center gap-3">
+            <div className="rounded bg-accent px-2 py-1 text-xs font-black tracking-wider text-ink-950 shadow-sm">
+              PDV
+            </div>
+            <h1 className="text-lg font-bold tracking-tight text-ink-50 drop-shadow-sm">
+              {nomeEmpresa}
+            </h1>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-5 text-xs text-ink-50">
+          <div>
+            <span className="font-bold text-accent">[F2]</span> ORÇAMENTO
+          </div>
+          <div>
+            <span className="font-bold text-accent">[F3]</span> BUSCAR
+          </div>
+          <div>
+            <span className="font-bold text-accent">[F4]</span> FINALIZAR
+          </div>
+          <div>
+            <span className="font-bold text-accent">[F5]</span> CONSULTAR
+          </div>
+          <div>
+            <span className="font-bold text-accent">[F6]</span> CLIENTE
+          </div>
+          <div>
+            <span className="font-bold text-accent">[F8]</span> LIMPAR
+          </div>
+          <Link
+            to="/"
+            className="ml-2 flex items-center gap-1 rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs font-semibold text-ink-300 transition hover:border-accent/40 hover:text-accent"
+            title="Trocar ambiente"
+          >
+            <LogOut size={12} /> Sair
+          </Link>
+
+          <div className="ml-2 rounded-full border border-success/40 bg-black/30 px-3 py-1 font-semibold text-success backdrop-blur-sm">
+            ONLINE
+          </div>
+        </div>
+      </header>
+
+      <div className="flex items-center justify-between border-b border-ink-700/60 bg-ink-900/60 px-6 py-2 text-sm">
+        <div className="flex items-center gap-2">
+          <User
+            size={16}
+            className={clienteSelecionado ? "text-accent" : "text-ink-400"}
+          />
+          <span className="text-ink-300">Cliente:</span>
+          <span
+            className={`font-semibold ${
+              clienteSelecionado ? "text-accent" : "text-ink-200"
+            }`}
+          >
+            {clienteSelecionado ? clienteSelecionado.nome : "CONSUMIDOR FINAL"}
+          </span>
+          {clienteSelecionado && (
+            <span className="text-xs text-ink-400">
+              ({clienteSelecionado.documento})
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setModalClienteAberto(true)}
+            disabled={modoOrcamento}
+            className="flex items-center gap-1 text-xs font-semibold text-ink-300 transition hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <Search size={14} /> Buscar Cliente [F6]
+          </button>
+          {clienteSelecionado && !modoOrcamento && (
+            <button
+              type="button"
+              onClick={limparCliente}
+              className="flex items-center gap-1 text-xs font-semibold text-red-400 transition hover:text-red-300"
+            >
+              <X size={14} /> Limpar
+            </button>
+          )}
+        </div>
+      </div>
+
+      {modoOrcamento && (
+        <div className="flex items-center justify-between border-b border-accent/35 bg-accent/10 px-6 py-2 text-sm">
+          <div className="flex items-center gap-2 font-semibold text-accent">
+            <FileSpreadsheet size={16} />
+            <span>
+              Orçamento <span className="font-mono">{pedidoOrigemNumero}</span>{" "}
+              carregado — finalize com F4
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={limparVenda}
+            className="flex items-center gap-1 rounded border border-accent/35 px-2 py-0.5 text-xs font-semibold text-accent transition hover:bg-accent/20"
+          >
+            <RotateCcw size={12} /> Descartar carregamento
+          </button>
+        </div>
+      )}
+
+      <div className="flex flex-1 gap-4 overflow-hidden p-4">
+        <div className="flex w-5/12 flex-col gap-4">
+          <div
+            className={`rounded-xl border border-ink-700/60 bg-ink-900/70 p-5 shadow-md ${
+              modoOrcamento ? "pointer-events-none opacity-40" : ""
+            }`}
+          >
+            <form onSubmit={processarBusca} className="space-y-4">
+              <div className="grid grid-cols-4 gap-3">
+                <div className="col-span-1">
+                  <label className="mb-1 block text-xs font-bold uppercase tracking-wider text-ink-300">
+                    Qtd
+                  </label>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={quantidade}
+                    onChange={(e) =>
+                      setQuantidade(
+                        e.target.value
+                          .replace(/[^0-9.,]/g, "")
+                          .replace(",", "."),
+                      )
+                    }
+                    className="w-full rounded-lg border border-ink-700 bg-ink-950 p-2.5 text-center text-lg font-bold text-ink-100 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+                  />
+                </div>
+                <div className="col-span-3">
+                  <label className="mb-1 block text-xs font-bold uppercase tracking-wider text-ink-300">
+                    Código de Barras ou Descrição
+                  </label>
+                  <div className="flex gap-2">
+                    <div className="relative flex-1">
+                      <input
+                        ref={inputBuscaRef}
+                        type="text"
+                        placeholder="Passe o leitor ou digite o nome..."
+                        value={busca}
+                        onChange={(e) => setBusca(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            processarBusca(e as unknown as React.FormEvent);
+                          }
+                        }}
+                        className="w-full rounded-lg border border-ink-700 bg-ink-950 p-2.5 pl-10 text-lg font-medium text-ink-100 placeholder-ink-400 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+                      />
+                      <Barcode
+                        className="absolute left-3 top-3.5 text-ink-400"
+                        size={18}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={abrirModalProdutos}
+                      title="Buscar produtos (F3)"
+                      className="flex items-center gap-2 rounded-lg border border-ink-700 bg-ink-800 px-4 text-sm font-semibold text-ink-100 transition hover:border-accent hover:bg-ink-700 hover:text-accent"
+                    >
+                      <List size={18} />
+                      Buscar
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <button
+                type="submit"
+                className="hidden"
+                aria-hidden="true"
+                tabIndex={-1}
+              />
+            </form>
+          </div>
+
+          <div className="flex flex-1 flex-col justify-between rounded-xl border border-ink-700/60 bg-ink-900/70 p-5 shadow-md">
+            <div>
+              <div className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-ink-300">
+                <Package size={16} /> Último Produto Bipado
+              </div>
+              {ultimoItem ? (
+                <div className="space-y-3">
+                  <h3 className="text-xl font-bold leading-snug text-ink-100">
+                    {ultimoItem.descricao}
+                  </h3>
+                  <div className="grid grid-cols-2 gap-2 text-sm text-ink-300">
+                    <div>
+                      Unidade:{" "}
+                      <span className="font-semibold text-ink-100">
+                        {ultimoItem.unidade}
+                      </span>
+                    </div>
+                    <div>
+                      Estoque:{" "}
+                      <span className="font-semibold text-ink-100">
+                        {ultimoItem.estoqueSaldo}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-accent/35 bg-accent/10 p-4">
+                    <span className="text-xs font-semibold text-accent">
+                      Preço Unitário
+                    </span>
+                    <div className="text-3xl font-black text-accent">
+                      R$ {ultimoItem.precoVenda.toFixed(2)}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center justify-center py-16 text-ink-500">
+                  <Search size={48} strokeWidth={1.5} />
+                  <p className="mt-2 text-sm">Aguardando leitura de item</p>
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-lg bg-ink-950 px-4 py-2 text-center text-xs font-semibold text-ink-200">
+              {mensagemStatus}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex w-7/12 flex-col overflow-hidden rounded-xl border border-ink-700/60 bg-ink-900/70 shadow-md">
+          <div className="flex items-center justify-between border-b border-ink-800 bg-ink-900/80 px-6 py-3">
+            <div className="flex items-center gap-2 font-bold text-ink-100">
+              <ShoppingCart size={18} />
+              <span>Itens da Venda ({carrinho.length})</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={abrirModalOrcamentos}
+                className="flex items-center gap-1 text-xs font-semibold text-ink-300 transition hover:text-accent"
+              >
+                <FileSpreadsheet size={14} /> Consultar [F5]
+              </button>
+              <button
+                onClick={limparVenda}
+                className="flex items-center gap-1 text-xs font-semibold text-red-400 transition hover:text-red-300"
+              >
+                <RotateCcw size={14} /> Cancelar [F8]
+              </button>
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-y-auto">
+            {carrinho.length === 0 ? (
+              <div className="flex h-full flex-col items-center justify-center text-ink-500">
+                <ShoppingCart size={56} strokeWidth={1.2} />
+                <p className="mt-3 text-sm font-medium">
+                  Nenhum item adicionado ao carrinho
+                </p>
+              </div>
+            ) : (
+              <table className="w-full text-left text-sm">
+                <thead className="sticky top-0 border-b border-ink-800 bg-ink-900 text-xs font-bold uppercase text-ink-300">
+                  <tr>
+                    <th className="w-12 px-4 py-2.5 text-center">#</th>
+                    <th className="px-4 py-2.5">Descrição</th>
+                    <th className="w-24 px-4 py-2.5 text-center">Qtd / UN</th>
+                    <th className="w-28 px-4 py-2.5 text-right">Unitário</th>
+                    <th className="w-32 px-4 py-2.5 text-right">Total</th>
+                    <th className="w-12 px-4 py-2.5 text-center"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-ink-800">
+                  {carrinho.map((item, idx) => (
+                    <tr key={idx} className="transition hover:bg-ink-800/60">
+                      <td className="px-4 py-2.5 text-center font-bold text-ink-400">
+                        {idx + 1}
+                      </td>
+                      <td className="px-4 py-2.5 font-semibold text-ink-100">
+                        {item.descricao}
+                      </td>
+                      <td className="px-4 py-2.5 text-center font-medium text-ink-200">
+                        {item.quantidade} {item.unidade}
+                      </td>
+                      <td className="px-4 py-2.5 text-right text-ink-300">
+                        R$ {item.precoUnitario.toFixed(2)}
+                      </td>
+                      <td className="px-4 py-2.5 text-right font-bold text-ink-100">
+                        R$ {item.subtotal.toFixed(2)}
+                      </td>
+                      <td className="px-4 py-2.5 text-center">
+                        <button
+                          type="button"
+                          onClick={() => removerItem(idx)}
+                          disabled={modoOrcamento}
+                          className="text-ink-500 transition hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-30"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          <div className="border-t border-ink-800 bg-ink-900/80 p-6">
+            <div className="mb-4 flex items-center justify-between">
+              <span className="text-sm font-bold uppercase tracking-wider text-ink-300">
+                Total a Pagar
+              </span>
+              <div className="text-4xl font-black text-accent">
+                R$ {totalGeral.toFixed(2)}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={salvarComoOrcamento}
+                disabled={carrinho.length === 0 || loading || modoOrcamento}
+                className="flex items-center justify-center gap-2 rounded-xl border border-ink-700 bg-ink-800 py-3.5 text-sm font-bold text-ink-100 transition hover:bg-ink-700 disabled:opacity-50"
+              >
+                <FileSpreadsheet size={18} />
+                Gerar Orçamento [F2]
+              </button>
+              <button
+                type="button"
+                onClick={() => setModalAberto(true)}
+                disabled={carrinho.length === 0 || loading}
+                className="flex items-center justify-center gap-2 rounded-xl bg-accent py-3.5 text-base font-extrabold text-ink-950 shadow-md transition hover:bg-accent-light disabled:opacity-50"
+              >
+                <CheckCircle size={20} />
+                Finalizar Venda [F4]
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <ModalFinalizarVenda
+        aberto={modalAberto}
+        totalVenda={totalGeral}
+        onConfirmar={confirmarFinalizacao}
+        onFechar={() => {
+          setModalAberto(false);
+          inputBuscaRef.current?.focus();
+        }}
+      />
+
+      <ModalBuscarProduto
+        aberto={modalProdutoAberto}
+        produtos={produtosLista}
+        carregando={carregandoProdutos}
+        onSelecionar={selecionarProdutoDoModal}
+        onFechar={() => {
+          setModalProdutoAberto(false);
+          setTimeout(() => inputBuscaRef.current?.focus(), 100);
+        }}
+      />
+
+      <ModalOrcamentosAbertos
+        aberto={modalOrcamentosAberto}
+        onSelecionar={carregarOrcamentoNoCarrinho}
+        onCancelar={cancelarOrcamento}
+        onFechar={() => {
+          setModalOrcamentosAberto(false);
+          setTimeout(() => inputBuscaRef.current?.focus(), 100);
+        }}
+      />
+
+      <ModalBuscarCliente
+        aberto={modalClienteAberto}
+        onSelecionar={selecionarCliente}
+        onFechar={() => {
+          setModalClienteAberto(false);
+          setTimeout(() => inputBuscaRef.current?.focus(), 100);
+        }}
+      />
+    </div>
+  );
+};
