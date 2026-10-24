@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Search, X, Package } from 'lucide-react';
 
-import type { Produto } from '../types/pdv';
+import type { Produto } from '../../types/pdv';
 
 interface ModalBuscarProdutoProps {
   aberto: boolean;
