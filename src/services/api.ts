@@ -1,9 +1,9 @@
 import axios from 'axios';
 
-const baseURL = 'http://localhost:8090/api';
+const API_URL = import.meta.env.VITE_API_URL ?? "https://api.dx14.com.br";
 
 const api = axios.create({
-  baseURL,
+  baseURL: `${API_URL}/api`,
   headers: { "Content-Type": "application/json" },
 });
 
@@ -20,7 +20,7 @@ api.interceptors.response.use(
   },
 );
 
-export default api; 
+export default api;
 
 
 /*  const api = axios.create({
